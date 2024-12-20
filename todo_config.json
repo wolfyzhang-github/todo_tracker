@@ -1,0 +1,31 @@
+{
+  "file_patterns": [
+    "*.py", "*.js", "*.jsx", "*.ts", "*.tsx", 
+    "*.html", "*.css", "*.scss", "*.less"
+  ],
+  "exclude_dirs": [
+    "**/node_modules/**", 
+    "**/venv/**", 
+    "**/.git/**", 
+    "**/build/**", 
+    "**/dist/**", 
+    "**/__pycache__/**",
+    "**/temp/**"
+  ],
+  "priority_patterns": {
+    "critical": ["!!!!", "紧急", "立刻", "now"],
+    "high": ["!!!", "高", "high", "important"],
+    "medium": ["!!", "中", "medium"],
+    "low": ["!", "低", "low", "later"]
+  },
+  "output": {
+    "markdown": {
+      "file_name": "todo_tasks.md",
+      "include_context": true
+    },
+    "json": {
+      "file_name": "todo_data.json",
+      "pretty_print": true
+    }
+  }
+} 
