@@ -27,5 +27,20 @@
       "file_name": "todo_data.json",
       "pretty_print": true
     }
+  },
+  "ai_config": {
+    "provider": "openai",
+    "api_key": "your_api_key_here",
+    "api_base": "https://api.openai.com/v1",
+    "api_version": "",
+    "model": "gpt-3.5-turbo",
+    "max_tokens": 1000,
+    "temperature": 0.3,
+    "proxy": ""
+  },
+  "ai_analysis": {
+    "enabled": true,
+    "context_lines": 30,
+    "output_file": "todo_analysis.json"
   }
 } 

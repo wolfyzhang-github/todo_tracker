@@ -6,6 +6,9 @@ TodoTagger - 一个优雅的TODO注释追踪工具
 这个工具可以扫描项目中的TODO注释，按重要性分类，
 并以多种格式输出结果，帮助开发者更好地管理任务。
 
+作者: Your Name
+版本: 1.0.0
+许可: MIT
 """
 
 import re
@@ -13,10 +16,35 @@ import sys
 import json
 import argparse
 import datetime
+import os
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Tuple, Optional, Set
+from typing import List, Dict, Tuple, Optional, Set, Any, Union
 from colorama import Fore, Style, init
+
+# 检查是否可以导入AI分析器
+AI_ANALYZER_AVAILABLE = False
+try:
+    # 先尝试导入演示分析器（无需API的测试版）
+    from demo_ai_analysis import analyze_todos as ai_analyze_todos_demo
+    # 创建一个包装函数，忽略第二个参数
+    def ai_analyze_todos(todos, config_path=None):
+        return ai_analyze_todos_demo(todos)
+    AI_ANALYZER_AVAILABLE = True
+    print(f"{Fore.YELLOW}注意: 使用演示AI分析器。这仅提供模拟数据，不调用真实API。{Style.RESET_ALL}")
+except ImportError:
+    try:
+        # 尝试导入正式AI分析器
+        from todo_tracker.ai_analyzer import analyze_todos as ai_analyze_todos
+        AI_ANALYZER_AVAILABLE = True
+    except ImportError:
+        try:
+            # 尝试当前目录导入
+            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+            from ai_analyzer import analyze_todos as ai_analyze_todos
+            AI_ANALYZER_AVAILABLE = True
+        except ImportError:
+            pass
 
 # 初始化colorama
 init(autoreset=True)
@@ -54,6 +82,11 @@ DEFAULT_CONFIG = {
         "high": [r'!!', r'\bhigh\b', r'\bHIGH\b'],
         "medium": [r'!', r'\bmedium\b', r'\bMEDIUM\b'],
         "low": [r'\blow\b', r'\bLOW\b']
+    },
+    "ai_analysis": {
+        "enabled": False,
+        "context_lines": 30,
+        "output_file": "todo_analysis.json"
     }
 }
 
@@ -67,6 +100,8 @@ class TodoItem:
     assigned_to: str = ""
     context: str = ""
     creation_date: str = field(default_factory=lambda: datetime.datetime.now().isoformat())
+    # AI分析结果（可选）
+    ai_analysis: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict:
         """将对象转换为字典"""
@@ -85,6 +120,7 @@ class TodoItem:
             result += f" {Style.DIM}[分配给: {self.assigned_to}]{reset}"
             
         return result
+
 
 class TodoScanner:
     """TODO注释扫描器"""
@@ -195,11 +231,12 @@ class TodoScanner:
         
         return todos
 
+
 class OutputFormatter:
     """输出格式化器"""
     
     @staticmethod
-    def console(todos: List[TodoItem]) -> str:
+    def console(todos: List[TodoItem], show_ai_analysis: bool = False) -> str:
         """格式化为控制台输出"""
         if not todos:
             return "没有找到TODO注释"
@@ -229,6 +266,17 @@ class OutputFormatter:
             
             lines.append(todo.format_console())
             
+            # 如果有AI分析并且需要显示
+            if show_ai_analysis and todo.ai_analysis:
+                analysis = todo.ai_analysis
+                complexity = analysis.get("complexity", "")
+                hours = analysis.get("estimated_hours", "")
+                approach = analysis.get("implementation_approach", "")
+                
+                if complexity or hours or approach:
+                    lines.append(f"  {Style.DIM}└─ 复杂度: {complexity}, 估计工时: {hours}小时")
+                    lines.append(f"     实现思路: {approach[:100]}{'...' if len(approach) > 100 else ''}{Style.RESET_ALL}")
+            
         lines.extend([
             "=" * 80,
             f"总计: {len(todos)} 个TODO项"
@@ -237,7 +285,7 @@ class OutputFormatter:
         return "\n".join(lines)
     
     @staticmethod
-    def markdown(todos: List[TodoItem], output_file: str = "todo_report.md") -> str:
+    def markdown(todos: List[TodoItem], output_file: str = "todo_report.md", include_ai_analysis: bool = False) -> str:
         """生成Markdown格式的报告"""
         if not todos:
             content = "# TODO 报告\n\n*没有找到TODO注释*"
@@ -290,6 +338,78 @@ class OutputFormatter:
                     todo_line += f" *(分配给: {todo.assigned_to})*"
                 
                 content.append(todo_line + "\n")
+                
+                # 如果有AI分析并且需要包含AI分析
+                if include_ai_analysis and todo.ai_analysis:
+                    analysis = todo.ai_analysis
+                    complexity = analysis.get("complexity", "")
+                    hours = analysis.get("estimated_hours", "")
+                    approach = analysis.get("implementation_approach", "")
+                    skills = analysis.get("required_skills", [])
+                    challenges = analysis.get("potential_challenges", [])
+                    
+                    if complexity or hours:
+                        content.append(f"  - **复杂度**: {complexity}\n")
+                        content.append(f"  - **估计工时**: {hours}小时\n")
+                    
+                    if approach:
+                        content.append(f"  - **实现思路**: {approach}\n")
+                    
+                    if skills:
+                        content.append(f"  - **所需技能**: {', '.join(skills)}\n")
+                    
+                    if challenges:
+                        content.append(f"  - **潜在挑战**: {', '.join(challenges)}\n")
+                    
+                    content.append("\n")
+            
+            # 如果有工作计划，添加工作计划部分
+            has_work_plan = any(todo.ai_analysis and todo.ai_analysis.get("work_plan") for todo in todos)
+            if include_ai_analysis and has_work_plan:
+                # 找到第一个含有工作计划的TODO
+                work_plan = None
+                for todo in todos:
+                    if todo.ai_analysis and "work_plan" in todo.ai_analysis:
+                        work_plan = todo.ai_analysis["work_plan"]
+                        break
+                
+                if work_plan:
+                    content.append("\n## AI 建议的工作计划\n\n")
+                    
+                    # 总工时
+                    total_hours = work_plan.get("estimated_total_hours", 0)
+                    content.append(f"**总计估计工时**: {total_hours}小时\n\n")
+                    
+                    # 任务顺序
+                    content.append("### 建议任务顺序\n\n")
+                    sequence = work_plan.get("todo_sequence", [])
+                    timeline = work_plan.get("suggested_timeline", {})
+                    
+                    content.append("| 任务 | 内容 | 建议时间 |\n| --- | --- | --- |\n")
+                    for task_id in sequence:
+                        # 找到对应的TODO
+                        task_todo = None
+                        for todo in todos:
+                            if todo.ai_analysis and todo.ai_analysis.get("todo_id") == task_id:
+                                task_todo = todo
+                                break
+                        
+                        if task_todo:
+                            time_suggestion = timeline.get(task_id, "")
+                            content.append(f"| {task_id} | {task_todo.content} | {time_suggestion} |\n")
+                    
+                    # 依赖关系
+                    dependencies = work_plan.get("dependencies", {})
+                    if dependencies:
+                        content.append("\n### 任务依赖关系\n\n")
+                        for task_id, deps in dependencies.items():
+                            if deps:
+                                content.append(f"- **{task_id}** 依赖于: {', '.join(deps)}\n")
+                    
+                    # 总结
+                    summary = work_plan.get("summary", "")
+                    if summary:
+                        content.append(f"\n### 工作计划总结\n\n{summary}\n")
             
             content = "".join(content)
         
@@ -300,7 +420,7 @@ class OutputFormatter:
         return f"Markdown报告已生成: {output_file}"
     
     @staticmethod
-    def json(todos: List[TodoItem], output_file: str = "todo_report.json") -> str:
+    def json(todos: List[TodoItem], output_file: str = "todo_report.json", include_ai_analysis: bool = True) -> str:
         """生成JSON格式的报告"""
         # 转换为字典列表
         todo_dicts = [todo.to_dict() for todo in todos]
@@ -319,6 +439,15 @@ class OutputFormatter:
             json.dump(result, f, indent=2, ensure_ascii=False)
             
         return f"JSON报告已生成: {output_file}"
+    
+    @staticmethod
+    def ai_analysis(ai_result: Dict, output_file: str = "todo_analysis.json") -> str:
+        """保存AI分析结果"""
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(ai_result, f, indent=2, ensure_ascii=False)
+        
+        return f"AI分析报告已生成: {output_file}"
+
 
 def parse_arguments():
     """解析命令行参数"""
@@ -331,6 +460,7 @@ def parse_arguments():
   %(prog)s -d /path/to/project  # 扫描指定目录
   %(prog)s -o json              # 输出为JSON格式
   %(prog)s -o all               # 输出所有支持的格式
+  %(prog)s --ai-analyze         # 使用AI分析TODO
 """)
     
     parser.add_argument('-d', '--directory', default='.',
@@ -355,7 +485,22 @@ def parse_arguments():
                         version='%(prog)s 1.0.0',
                         help='显示版本信息并退出')
     
+    # AI分析相关参数
+    ai_group = parser.add_argument_group('AI分析选项')
+    ai_group.add_argument('--ai-analyze', action='store_true',
+                          help='使用AI分析TODO项 (需要配置API密钥)')
+    
+    ai_group.add_argument('--ai-show', action='store_true',
+                          help='在控制台输出中显示AI分析结果')
+    
+    ai_group.add_argument('--ai-provider', choices=['openai', 'azure', 'qwen_local'],
+                          help='AI提供商 (默认: 配置文件中的设置)')
+    
+    ai_group.add_argument('--ai-model',
+                          help='要使用的AI模型 (默认: 配置文件中的设置)')
+    
     return parser.parse_args()
+
 
 def main():
     """主函数"""
@@ -391,21 +536,71 @@ def main():
     if args.filter != 'all':
         todos = [todo for todo in todos if todo.priority == args.filter]
     
+    # 检查是否启用AI分析
+    ai_enabled = args.ai_analyze or (config.get("ai_analysis", {}).get("enabled", False))
+    
+    # 如果启用了AI分析，但模块不可用
+    if ai_enabled and not AI_ANALYZER_AVAILABLE:
+        print(f"{Fore.YELLOW}警告: AI分析器不可用。请确保已安装必要的依赖。{Style.RESET_ALL}", file=sys.stderr)
+        ai_enabled = False
+    
+    # 执行AI分析
+    if ai_enabled and todos:
+        if not args.quiet:
+            print(f"{Fore.BLUE}正在使用AI分析TODO项...{Style.RESET_ALL}")
+        
+        # 准备要分析的TODO列表
+        todos_for_ai = []
+        for i, todo in enumerate(todos):
+            todos_for_ai.append({
+                'content': todo.content,
+                'file_path': todo.file_path,
+                'line_number': todo.line_number,
+                'priority': todo.priority
+            })
+        
+        # 执行AI分析
+        try:
+            ai_result = ai_analyze_todos(todos_for_ai, args.config or "todo_config.json")
+            
+            # 将分析结果合并到TODO项中
+            if ai_result and "analyses" in ai_result:
+                analyses = ai_result["analyses"]
+                for i, analysis in enumerate(analyses):
+                    if i < len(todos):
+                        # 将分析结果添加到TODO项
+                        todos[i].ai_analysis = analysis
+            
+            # 保存AI分析结果
+            ai_output_file = config.get("ai_analysis", {}).get("output_file", "todo_analysis.json")
+            formatter = OutputFormatter()
+            result = formatter.ai_analysis(ai_result, ai_output_file)
+            if not args.quiet:
+                print(result)
+        except Exception as e:
+            print(f"{Fore.RED}AI分析过程中出错: {e}{Style.RESET_ALL}", file=sys.stderr)
+    
     # 格式化输出
     formatter = OutputFormatter()
     
     if args.output == 'console' or args.output == 'all':
-        print(formatter.console(todos))
+        show_ai = args.ai_show and ai_enabled
+        print(formatter.console(todos, show_ai))
     
     if args.output == 'markdown' or args.output == 'all':
-        result = formatter.markdown(todos)
+        # 获取配置中的输出文件名
+        markdown_file = config.get("output", {}).get("markdown", {}).get("file_name", "todo_report.md")
+        result = formatter.markdown(todos, markdown_file, include_ai_analysis=ai_enabled)
         if not args.quiet:
             print(result)
     
     if args.output == 'json' or args.output == 'all':
-        result = formatter.json(todos)
+        # 获取配置中的输出文件名
+        json_file = config.get("output", {}).get("json", {}).get("file_name", "todo_report.json")
+        result = formatter.json(todos, json_file, include_ai_analysis=ai_enabled)
         if not args.quiet:
             print(result)
+
 
 if __name__ == "__main__":
     main() 
